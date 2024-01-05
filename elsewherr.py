@@ -1,9 +1,13 @@
+import concurrent.futures
+
 import requests
 import re
 import yaml
 import logging
 
 from typing import List, Dict, Tuple
+
+MAX_THREADS = 5
 
 
 def setup_logging() -> None:
@@ -60,52 +64,59 @@ def get_provider_tags(config: Dict, required_providers_lower: List) -> Tuple[Lis
         raise
 
 
-def process_movies(movies: List[Dict], config: Dict, provider_tags_to_remove: List[Dict],
-                   provider_tags_to_add: List[Dict]) -> None:
-    """Process each movie in turn."""
+def process_movie(movie: Dict, config: Dict, provider_tags_to_remove: List[Dict],
+                  provider_tags_to_add: List[Dict]) -> None:
+    """Process a single movie."""
     radarr_headers = {'Content-Type': 'application/json', "X-Api-Key": config["radarrApiKey"]}
     tmdb_headers = {'Content-Type': 'application/json'}
 
-    for movie in movies:
-        update = movie
-        logging.info(
-            "-------------------------------------------------------------------------------------------------")
-        logging.info("Movie: " + movie["title"])
-        logging.info("TMDB ID: " + str(movie["tmdbId"]))
-        logging.info(f'Movie record from Radarr: {movie}')
+    logging.info(
+        "-------------------------------------------------------------------------------------------------")
+    logging.info("Movie: " + movie["title"])
+    logging.info("TMDB ID: " + str(movie["tmdbId"]))
+    logging.info(f'Movie record from Radarr: {movie}')
 
-        try:
-            tmdb_providers = get_tmdb_providers(movie["tmdbId"], config["tmdbApiKey"], config["providerRegion"],
-                                                tmdb_headers)
-            providers = tmdb_providers["results"][config["providerRegion"]]["flatrate"]
-            logging.info(f'Flat Rate Providers: {providers}')
-        except KeyError:
-            logging.info("No Flatrate Providers")
-            continue
-        except Exception as e:
-            logging.error(f"Error getting providers for movie {movie['title']}: {str(e)}")
-            continue
+    try:
+        tmdb_providers = get_tmdb_providers(movie["tmdbId"], config["tmdbApiKey"], config["providerRegion"],
+                                            tmdb_headers)
+        providers = tmdb_providers["results"][config["providerRegion"]]["flatrate"]
+        logging.info(f'Flat Rate Providers: {providers}')
+    except KeyError:
+        logging.info("No Flatrate Providers")
+        return
+    except Exception as e:
+        logging.error(f"Error getting providers for movie {movie['title']}: {str(e)}")
+        return
 
-        update_tags = remove_provider_tags(movie.get("tags", []), provider_tags_to_remove)
+    update_tags = remove_provider_tags(movie.get("tags", []), provider_tags_to_remove)
 
-        for provider in providers:
-            provider_name = provider["provider_name"]
-            tag_to_add = (config["tagPrefix"] + re.sub('[^A-Za-z0-9]+', '', provider_name)).lower()
+    for provider in providers:
+        provider_name = provider["provider_name"]
+        tag_to_add = (config["tagPrefix"] + re.sub('[^A-Za-z0-9]+', '', provider_name)).lower()
 
-            for provider_tag_to_add in provider_tags_to_add:
-                if tag_to_add in provider_tag_to_add["label"]:
-                    logging.info("Adding tag " + tag_to_add)
-                    update_tags.append(provider_tag_to_add["id"])
+        for provider_tag_to_add in provider_tags_to_add:
+            if tag_to_add in provider_tag_to_add["label"]:
+                logging.info("Adding tag " + tag_to_add)
+                update_tags.append(provider_tag_to_add["id"])
 
-        update["tags"] = update_tags
-        logging.info(f'Updated Movie record to send to Radarr: {update}')
+    movie["tags"] = update_tags
+    logging.info(f'Updated Movie record to send to Radarr: {movie}')
 
-        try:
-            pass
-            response = requests.put(config["radarrUrl"] + '/api/v3/movie', json=update, headers=radarr_headers)
-            response.raise_for_status()
-        except Exception as e:
-            logging.error(f"Error updating movie {movie['title']} in Radarr: {str(e)}")
+    try:
+        pass
+        response = requests.put(f"{config['radarrUrl']}/api/v3/movie", json=movie, headers=radarr_headers)
+        response.raise_for_status()
+    except Exception as e:
+        logging.error(f"Error updating movie {movie['title']} in Radarr: {str(e)}")
+
+
+def process_movies(movies: List[Dict], config: Dict, provider_tags_to_remove: List, provider_tags_to_add: List):
+    """Process movies concurrently using ThreadPoolExecutor with a maximum number of threads."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        futures = [
+            executor.submit(process_movie, movie, config, provider_tags_to_remove, provider_tags_to_add) for movie in
+            movies]
+        concurrent.futures.wait(futures)
 
 
 def get_tmdb_providers(tmdb_id: int, api_key: str, region: str, headers: Dict) -> Dict:
