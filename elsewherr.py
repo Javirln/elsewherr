@@ -86,7 +86,7 @@ def process_movies(movies: List[Dict], config: Dict, provider_tags_to_remove: Li
             logging.error(f"Error getting providers for movie {movie['title']}: {str(e)}")
             continue
 
-        # update_tags = remove_provider_tags(movie.get("tags", []), provider_tags_to_remove)
+        update_tags = remove_provider_tags(movie.get("tags", []), provider_tags_to_remove)
 
         for provider in providers:
             provider_name = provider["provider_name"]
@@ -95,15 +95,15 @@ def process_movies(movies: List[Dict], config: Dict, provider_tags_to_remove: Li
             for provider_tag_to_add in provider_tags_to_add:
                 if tag_to_add in provider_tag_to_add["label"]:
                     logging.info("Adding tag " + tag_to_add)
-                    # update_tags.append(provider_tag_to_add["id"])
+                    update_tags.append(provider_tag_to_add["id"])
 
-        # update["tags"] = update_tags
+        update["tags"] = update_tags
         logging.info(f'Updated Movie record to send to Radarr: {update}')
 
         try:
             pass
-            # radarr_update = requests.put(config["radarrUrl"] + '/api/v3/movie', json=update, headers=radarr_headers)
-            # logging.info(radarr_update)
+            response = requests.put(config["radarrUrl"] + '/api/v3/movie', json=update, headers=radarr_headers)
+            response.raise_for_status()
         except Exception as e:
             logging.error(f"Error updating movie {movie['title']} in Radarr: {str(e)}")
 
